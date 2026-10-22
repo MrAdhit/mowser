@@ -55,5 +55,5 @@ jobs:
     uses: ./.github/workflows/stages.yml
     with:
       target: mac-arm64
-      runner: macos-15
+      runner: macos-26
     secrets: inherit
