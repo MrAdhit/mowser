@@ -1,0 +1,20 @@
+target_os = "android"
+target_cpu = "arm64"
+
+is_debug = false
+is_component_build = false
+symbol_level = 0
+blink_symbol_level = 0
+v8_symbol_level = 0
+
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+
+# Use features' default states instead of the field trial testing config, which enables
+# experiments such as MigrateAccountManagerDelegate.
+disable_fieldtrial_testing_config = true
+
+# Chromium compiles its extensions system for Android only in the desktop Android
+# configuration. Mowser uses it for the bundled uBlock Origin and keeps the phone
+# UI (patches/0005-desktop-android-phone-ui.patch).
+is_desktop_android = true

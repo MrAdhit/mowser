@@ -1,0 +1,30 @@
+diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
+index 4f8d014573..cc2c64b1a8 100644
+--- a/chrome/android/java/AndroidManifest.xml
++++ b/chrome/android/java/AndroidManifest.xml
+@@ -216,6 +216,11 @@ by a child template that "extends" this file.
+       </queries>
+     {% endif %}
+ 
++    <!-- MicroG-RE provides this app's Google accounts through its accounts content provider. -->
++    <queries>
++      <package android:name="app.revanced.android.gms" />
++    </queries>
++
+     <!-- Set android:largeHeap to "true" to allow more than the default
+          Java heap limit (32Mb on Nexus S, 48Mb on Xoom). -->
+       <application android:name="{% block application_name %}org.chromium.chrome.browser.base.SplitChromeApplication{% endblock %}"
+@@ -1417,6 +1422,13 @@ by a child template that "extends" this file.
+ 
+       <meta-data android:name="android.allow_multiple_resumed_activities" android:value="true" />
+ 
++      <!-- MicroG-RE reports these as this app's package name and signing certificate SHA-1
++           when it requests access tokens from Google. They are Chrome's. -->
++      <meta-data android:name="app.revanced.android.gms.SPOOFED_PACKAGE_NAME"
++          android:value="com.android.chrome" />
++      <meta-data android:name="app.revanced.android.gms.SPOOFED_PACKAGE_SIGNATURE"
++          android:value="38918a453d07199354f8b19af05ec6562ced5788" />
++
+       <!-- Samsung MultiWindow Support -->
+       <meta-data android:name="com.samsung.android.sdk.multiwindow.enable"
+           android:value="true" />

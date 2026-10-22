@@ -1,0 +1,12 @@
+__pycache__/
+*.py[oc]
+.venv
+.env
+
+# Local-only material from the earlier mowser attempt.
+reference/
+
+*.apk
+.sandbox-id
+.emulator-id
+.snapshot-id

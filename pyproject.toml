@@ -1,0 +1,9 @@
+[project]
+name = "mowser"
+version = "0.1.0"
+description = "Chromium for Android with Google sign-in and sync through MicroG-RE, and a built-in uBlock Origin."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "modal>=1.6.1",
+]

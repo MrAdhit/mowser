@@ -1,0 +1,503 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -1188,6 +1188,7 @@
+   "java/src/org/chromium/chrome/browser/suggestions/tile/tile_edit_dialog/CustomTileEditView.java",
+   "java/src/org/chromium/chrome/browser/supervised_user/ChildAccountService.java",
+   "java/src/org/chromium/chrome/browser/survey/ChromeSurveyController.java",
++  "java/src/org/chromium/chrome/browser/sync/MicrogTrustedVaultBackendFactory.java",
+   "java/src/org/chromium/chrome/browser/sync/SyncErrorNotifier.java",
+   "java/src/org/chromium/chrome/browser/sync/settings/AccountManagementFragment.java",
+   "java/src/org/chromium/chrome/browser/sync/settings/BatchUploadCardPreference.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/sync/MicrogTrustedVaultBackendFactory.java b/chrome/android/java/src/org/chromium/chrome/browser/sync/MicrogTrustedVaultBackendFactory.java
+new file mode 100644
+index 0000000000..523f06261e
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/sync/MicrogTrustedVaultBackendFactory.java
+@@ -0,0 +1,486 @@
++// Copyright 2026 The Mowser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.sync;
++
++import android.app.PendingIntent;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
++import android.content.ServiceConnection;
++import android.os.Binder;
++import android.os.Bundle;
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.RemoteException;
++
++import org.chromium.base.Callback;
++import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
++import org.chromium.base.Promise;
++import org.chromium.base.ThreadUtils;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.build.annotations.ServiceImpl;
++import org.chromium.components.signin.base.CoreAccountInfo;
++import org.chromium.components.trusted_vault.SecurityDomainId;
++import org.chromium.components.trusted_vault.TrustedVaultClient;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++
++/**
++ * TrustedVaultClient backends backed by MicroG-RE's key retrieval ("Folsom") service.
++ *
++ * <p>MicroG-RE stores the keys of each security domain after the user retrieves them in its key
++ * retrieval UI, a WebView showing Google's encryption unlock page. This backend reads those keys
++ * and opens that UI. It serves the Chrome sync security domain; other domains use {@link
++ * TrustedVaultClient.EmptyBackend}.
++ *
++ * <p>MicroG-RE is reached over Binder with the Play services service broker protocol: binding the
++ * Folsom action yields an IGmsServiceBroker, whose getService() call returns the
++ * IKeyRetrievalService for one security domain. Requests and results are SafeParcelables, which
++ * this class reads and writes by hand.
++ */
++@NullMarked
++@ServiceImpl(TrustedVaultClient.BackendFactory.class)
++public class MicrogTrustedVaultBackendFactory implements TrustedVaultClient.BackendFactory {
++    @Override
++    public TrustedVaultClient.Backend createBackend(@SecurityDomainId int securityDomainId) {
++        if (securityDomainId == SecurityDomainId.CHROME_SYNC) {
++            return new MicrogBackend("chromesync");
++        }
++        return new TrustedVaultClient.EmptyBackend();
++    }
++
++    private static class MicrogBackend implements TrustedVaultClient.Backend {
++        private static final String TAG = "MicrogTrustedVault";
++
++        private static final String MICROG_PACKAGE = "app.revanced.android.gms";
++        private static final String FOLSOM_ACTION =
++                "app.revanced.android.gms.auth.key.retrieval.service.START";
++        private static final int FOLSOM_SERVICE_ID = 172;
++        private static final int GMS_VERSION = 12451000;
++
++        private static final String SERVICE_BROKER =
++                "com.google.android.gms.common.internal.IGmsServiceBroker";
++        private static final String GMS_CALLBACKS =
++                "com.google.android.gms.common.internal.IGmsCallbacks";
++        private static final String KEY_RETRIEVAL_SERVICE =
++                "com.google.android.gms.auth.folsom.internal.IKeyRetrievalService";
++        private static final String KEY_RETRIEVAL_CALLBACK =
++                "com.google.android.gms.auth.folsom.internal.IKeyRetrievalCallback";
++        private static final String SHARED_KEY_CALLBACK =
++                "com.google.android.gms.auth.folsom.internal.ISharedKeyCallback";
++
++        // Transaction codes: FIRST_CALL_TRANSACTION plus the method index in the AIDL.
++        private static final int TRANSACTION_GET_SERVICE = 46;
++        private static final int TRANSACTION_ON_POST_INIT_COMPLETE = 1;
++        private static final int TRANSACTION_ON_POST_INIT_COMPLETE_WITH_INFO = 3;
++        private static final int TRANSACTION_MARK_LOCAL_KEYS_AS_STALE = 4;
++        private static final int TRANSACTION_GET_KEY_MATERIAL = 5;
++        private static final int TRANSACTION_START_UX_FLOW = 12;
++        private static final int TRANSACTION_ON_RESULT = 1;
++
++        private static final int STATUS_SUCCESS = 0;
++        private static final int UX_FLOW_KEY_RETRIEVAL = 1;
++
++        private static final int SAFE_PARCEL_OBJECT_HEADER = 20293;
++
++        private final String mSecurityDomain;
++        private final List<Callback<@Nullable IBinder>> mPendingRequests = new ArrayList<>();
++        private @Nullable IBinder mService;
++        private boolean mConnecting;
++
++        MicrogBackend(String securityDomain) {
++            mSecurityDomain = securityDomain;
++        }
++
++        @Override
++        public Promise<List<byte[]>> fetchKeys(CoreAccountInfo accountInfo) {
++            Promise<List<byte[]>> promise = new Promise<>();
++            withService(
++                    service -> {
++                        if (service == null) {
++                            promise.fulfill(Collections.emptyList());
++                            return;
++                        }
++                        Binder callback =
++                                new ResultBinder(SHARED_KEY_CALLBACK) {
++                                    @Override
++                                    void onResult(Parcel data) {
++                                        Result result = readStatus(data);
++                                        List<SharedKey> keys = readSharedKeys(data);
++                                        Log.i(
++                                                TAG,
++                                                "getKeyMaterial: status %d, %d keys",
++                                                result.mStatusCode,
++                                                keys.size());
++                                        List<byte[]> keyMaterial = new ArrayList<>();
++                                        if (result.mStatusCode == STATUS_SUCCESS) {
++                                            Collections.sort(
++                                                    keys,
++                                                    (a, b) ->
++                                                            Integer.compare(
++                                                                    a.mVersion, b.mVersion));
++                                            for (SharedKey key : keys) {
++                                                keyMaterial.add(key.mMaterial);
++                                            }
++                                        }
++                                        ThreadUtils.postOnUiThread(
++                                                () -> promise.fulfill(keyMaterial));
++                                    }
++                                };
++                        if (!call(
++                                service,
++                                TRANSACTION_GET_KEY_MATERIAL,
++                                callback,
++                                accountInfo.getEmail())) {
++                            promise.fulfill(Collections.emptyList());
++                        }
++                    });
++            return promise;
++        }
++
++        @Override
++        public Promise<PendingIntent> createKeyRetrievalIntent(CoreAccountInfo accountInfo) {
++            Promise<PendingIntent> promise = new Promise<>();
++            withService(
++                    service -> {
++                        if (service == null) {
++                            promise.reject();
++                            return;
++                        }
++                        Binder callback =
++                                new ResultBinder(KEY_RETRIEVAL_CALLBACK) {
++                                    @Override
++                                    void onResult(Parcel data) {
++                                        Result result = readStatus(data);
++                                        PendingIntent resolution = result.mResolution;
++                                        Log.i(
++                                                TAG,
++                                                "startUxFlow: status %d, intent %b",
++                                                result.mStatusCode,
++                                                resolution != null);
++                                        ThreadUtils.postOnUiThread(
++                                                () -> {
++                                                    if (resolution == null) {
++                                                        promise.reject();
++                                                    } else {
++                                                        promise.fulfill(resolution);
++                                                    }
++                                                });
++                                    }
++                                };
++                        Parcel data = Parcel.obtain();
++                        data.writeInterfaceToken(KEY_RETRIEVAL_SERVICE);
++                        data.writeStrongBinder(callback);
++                        data.writeString(accountInfo.getEmail());
++                        data.writeInt(UX_FLOW_KEY_RETRIEVAL);
++                        data.writeInt(0); // No ApiMetadata.
++                        if (!transact(service, TRANSACTION_START_UX_FLOW, data)) {
++                            promise.reject();
++                        }
++                    });
++            return promise;
++        }
++
++        @Override
++        public Promise<Boolean> markLocalKeysAsStale(CoreAccountInfo accountInfo) {
++            Promise<Boolean> promise = new Promise<>();
++            withService(
++                    service -> {
++                        if (service == null) {
++                            promise.fulfill(false);
++                            return;
++                        }
++                        Binder callback =
++                                new ResultBinder(KEY_RETRIEVAL_CALLBACK) {
++                                    @Override
++                                    void onResult(Parcel data) {
++                                        boolean success =
++                                                readStatus(data).mStatusCode == STATUS_SUCCESS;
++                                        ThreadUtils.postOnUiThread(() -> promise.fulfill(success));
++                                    }
++                                };
++                        if (!call(
++                                service,
++                                TRANSACTION_MARK_LOCAL_KEYS_AS_STALE,
++                                callback,
++                                accountInfo.getEmail())) {
++                            promise.fulfill(false);
++                        }
++                    });
++            return promise;
++        }
++
++        @Override
++        public Promise<Boolean> getIsRecoverabilityDegraded(CoreAccountInfo accountInfo) {
++            return Promise.fulfilled(false);
++        }
++
++        @Override
++        public Promise<Void> addTrustedRecoveryMethod(
++                CoreAccountInfo accountInfo, byte[] publicKey, int methodTypeHint) {
++            return Promise.rejected();
++        }
++
++        @Override
++        public Promise<PendingIntent> createRecoverabilityDegradedIntent(
++                CoreAccountInfo accountInfo) {
++            return Promise.rejected();
++        }
++
++        @Override
++        public Promise<PendingIntent> createOptInIntent(CoreAccountInfo accountInfo) {
++            return Promise.rejected();
++        }
++
++        /**
++         * Runs {@code request} on the UI thread with the IKeyRetrievalService binder, connecting
++         * first if needed. The binder is null when MicroG-RE cannot be reached.
++         */
++        private void withService(Callback<@Nullable IBinder> request) {
++            ThreadUtils.runOnUiThread(
++                    () -> {
++                        if (mService != null && mService.isBinderAlive()) {
++                            request.onResult(mService);
++                            return;
++                        }
++                        mService = null;
++                        mPendingRequests.add(request);
++                        if (!mConnecting) connect();
++                    });
++        }
++
++        private void connect() {
++            mConnecting = true;
++            Context context = ContextUtils.getApplicationContext();
++            Intent intent = new Intent(FOLSOM_ACTION).setPackage(MICROG_PACKAGE);
++            ServiceConnection connection =
++                    new ServiceConnection() {
++                        @Override
++                        public void onServiceConnected(ComponentName name, IBinder broker) {
++                            requestKeyRetrievalService(broker);
++                        }
++
++                        @Override
++                        public void onServiceDisconnected(ComponentName name) {
++                            mService = null;
++                        }
++                    };
++            boolean bound;
++            try {
++                bound = context.bindService(intent, connection, Context.BIND_AUTO_CREATE);
++            } catch (SecurityException e) {
++                Log.w(TAG, "Binding MicroG-RE failed", e);
++                bound = false;
++            }
++            if (!bound) {
++                Log.w(TAG, "MicroG-RE key retrieval service is not available");
++                finishConnecting(null);
++            }
++        }
++
++        /** Asks the service broker for the IKeyRetrievalService of this security domain. */
++        private void requestKeyRetrievalService(IBinder broker) {
++            Binder callbacks =
++                    new Binder() {
++                        @Override
++                        protected boolean onTransact(
++                                int code, Parcel data, @Nullable Parcel reply, int flags)
++                                throws RemoteException {
++                            if (code != TRANSACTION_ON_POST_INIT_COMPLETE
++                                    && code != TRANSACTION_ON_POST_INIT_COMPLETE_WITH_INFO) {
++                                return super.onTransact(code, data, reply, flags);
++                            }
++                            data.enforceInterface(GMS_CALLBACKS);
++                            int statusCode = data.readInt();
++                            IBinder service = data.readStrongBinder();
++                            Log.i(TAG, "getService: status %d", statusCode);
++                            if (reply != null) reply.writeNoException();
++                            ThreadUtils.postOnUiThread(
++                                    () ->
++                                            finishConnecting(
++                                                    statusCode == STATUS_SUCCESS ? service : null));
++                            return true;
++                        }
++                    };
++            Parcel data = Parcel.obtain();
++            data.writeInterfaceToken(SERVICE_BROKER);
++            data.writeStrongBinder(callbacks);
++            data.writeInt(1); // GetServiceRequest is present.
++            writeGetServiceRequest(data);
++            if (!transact(broker, TRANSACTION_GET_SERVICE, data)) finishConnecting(null);
++        }
++
++        private void writeGetServiceRequest(Parcel parcel) {
++            Bundle extras = new Bundle();
++            extras.putString("SECURITY_DOMAIN", mSecurityDomain);
++
++            int request = beginField(parcel, SAFE_PARCEL_OBJECT_HEADER);
++            writeIntField(parcel, 1, 6); // versionCode
++            writeIntField(parcel, 2, FOLSOM_SERVICE_ID);
++            writeIntField(parcel, 3, GMS_VERSION);
++            int packageName = beginField(parcel, 4);
++            parcel.writeString(ContextUtils.getApplicationContext().getPackageName());
++            endField(parcel, packageName);
++            int extrasField = beginField(parcel, 7);
++            parcel.writeBundle(extras);
++            endField(parcel, extrasField);
++            writeIntField(parcel, 12, 1); // supportsConnectionInfo
++            endField(parcel, request);
++        }
++
++        private void finishConnecting(@Nullable IBinder service) {
++            mConnecting = false;
++            mService = service;
++            List<Callback<@Nullable IBinder>> requests = new ArrayList<>(mPendingRequests);
++            mPendingRequests.clear();
++            for (Callback<@Nullable IBinder> request : requests) request.onResult(service);
++        }
++
++        /**
++         * Calls an IKeyRetrievalService method that takes (callback, accountName, metadata).
++         * Returns false if the call fails.
++         */
++        private static boolean call(
++                IBinder service, int code, Binder callback, String accountName) {
++            Parcel data = Parcel.obtain();
++            data.writeInterfaceToken(KEY_RETRIEVAL_SERVICE);
++            data.writeStrongBinder(callback);
++            data.writeString(accountName);
++            data.writeInt(0); // No ApiMetadata.
++            return transact(service, code, data);
++        }
++
++        /** Sends and recycles {@code data}. Returns false if the call fails. */
++        private static boolean transact(IBinder binder, int code, Parcel data) {
++            Parcel reply = Parcel.obtain();
++            try {
++                binder.transact(code, data, reply, 0);
++                reply.readException();
++                return true;
++            } catch (RemoteException | RuntimeException e) {
++                Log.w(TAG, "MicroG-RE call %d failed", code, e);
++                return false;
++            } finally {
++                data.recycle();
++                reply.recycle();
++            }
++        }
++
++        /** Receives a callback whose single method takes a Status first. */
++        private abstract static class ResultBinder extends Binder {
++            private final String mDescriptor;
++
++            ResultBinder(String descriptor) {
++                mDescriptor = descriptor;
++            }
++
++            abstract void onResult(Parcel data);
++
++            @Override
++            protected boolean onTransact(int code, Parcel data, @Nullable Parcel reply, int flags)
++                    throws RemoteException {
++                if (code != TRANSACTION_ON_RESULT) {
++                    return super.onTransact(code, data, reply, flags);
++                }
++                data.enforceInterface(mDescriptor);
++                onResult(data);
++                if (reply != null) reply.writeNoException();
++                return true;
++            }
++        }
++
++        private static class Result {
++            int mStatusCode = -1;
++            @Nullable PendingIntent mResolution;
++        }
++
++        private static class SharedKey {
++            int mVersion;
++            byte[] mMaterial = new byte[0];
++        }
++
++        /** Reads a nullable Status. A missing Status reads as an error. */
++        private static Result readStatus(Parcel parcel) {
++            Result result = new Result();
++            if (parcel.readInt() == 0) return result;
++            readSafeParcel(
++                    parcel,
++                    (id, size) -> {
++                        if (id == 1) result.mStatusCode = parcel.readInt();
++                        if (id == 3) {
++                            result.mResolution = PendingIntent.CREATOR.createFromParcel(parcel);
++                        }
++                    });
++            return result;
++        }
++
++        /** Reads a nullable typed array of SharedKey. */
++        private static List<SharedKey> readSharedKeys(Parcel parcel) {
++            List<SharedKey> keys = new ArrayList<>();
++            int count = parcel.readInt();
++            for (int i = 0; i < count; i++) {
++                if (parcel.readInt() == 0) continue;
++                SharedKey key = new SharedKey();
++                readSafeParcel(
++                        parcel,
++                        (id, size) -> {
++                            if (id == 1) key.mVersion = parcel.readInt();
++                            if (id == 2) {
++                                byte[] material = parcel.createByteArray();
++                                if (material != null) key.mMaterial = material;
++                            }
++                        });
++                keys.add(key);
++            }
++            return keys;
++        }
++
++        private interface FieldReader {
++            /** Reads field {@code id}, which starts at the parcel's position. */
++            void read(int id, int size);
++        }
++
++        /** Reads a SafeParcelable object, passing each field to {@code reader}. */
++        private static void readSafeParcel(Parcel parcel, FieldReader reader) {
++            int objectSize = readFieldSize(parcel, parcel.readInt());
++            int end = parcel.dataPosition() + objectSize;
++            while (parcel.dataPosition() < end) {
++                int header = parcel.readInt();
++                int size = readFieldSize(parcel, header);
++                int start = parcel.dataPosition();
++                reader.read(header & 0xFFFF, size);
++                parcel.setDataPosition(start + size);
++            }
++            parcel.setDataPosition(end);
++        }
++
++        private static int readFieldSize(Parcel parcel, int header) {
++            return (header & 0xFFFF0000) == 0xFFFF0000 ? parcel.readInt() : header >>> 16;
++        }
++
++        /** Writes a SafeParcelable field header with a size filled in by {@link #endField}. */
++        private static int beginField(Parcel parcel, int id) {
++            parcel.writeInt(0xFFFF0000 | id);
++            parcel.writeInt(0);
++            return parcel.dataPosition();
++        }
++
++        private static void endField(Parcel parcel, int start) {
++            int end = parcel.dataPosition();
++            parcel.setDataPosition(start - 4);
++            parcel.writeInt(end - start);
++            parcel.setDataPosition(end);
++        }
++
++        private static void writeIntField(Parcel parcel, int id, int value) {
++            parcel.writeInt((4 << 16) | id);
++            parcel.writeInt(value);
++        }
++    }
++}

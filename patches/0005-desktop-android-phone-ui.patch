@@ -1,0 +1,105 @@
+diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
+index bba7c36852..66f63e58ed 100644
+--- a/build/config/android/rules.gni
++++ b/build/config/android/rules.gni
+@@ -2063,9 +2063,8 @@ if (!is_robolectric && enable_java_templates) {
+       } else {
+         defines += [ "_LOGTAG_PREFIX=cr_" ]
+       }
+-      if (is_desktop_android) {
+-        defines += [ "_IS_DESKTOP_ANDROID" ]
+-      }
++      # Mowser builds with is_desktop_android for the extensions system but
++      # keeps the phone UI, so Java code sees a non-desktop build.
+ 
+       if (defined(invoker.write_clang_profiling_data) &&
+           invoker.write_clang_profiling_data) {
+diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browser/flags/android/chrome_feature_list.cc
+index 78ab7920db..08da9b3314 100644
+--- a/chrome/browser/flags/android/chrome_feature_list.cc
++++ b/chrome/browser/flags/android/chrome_feature_list.cc
+@@ -1008,7 +1008,7 @@ BASE_FEATURE(kUseAppTaskForCustomTabActivation, base::FEATURE_ENABLED_BY_DEFAULT
+ BASE_FEATURE(kUseLibunwindstackNativeUnwinderAndroid, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kUsePLinkInHelp, base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kUseWebUiNtp3PDSE, base::FEATURE_DISABLED_BY_DEFAULT);
+-BASE_FEATURE(kUseWebUiNtpAndroid, BUILDFLAG(IS_DESKTOP_ANDROID) ? base::FEATURE_ENABLED_BY_DEFAULT : base::FEATURE_DISABLED_BY_DEFAULT);
++BASE_FEATURE(kUseWebUiNtpAndroid, base::FEATURE_DISABLED_BY_DEFAULT);
+ // Verify sign-in state on startup.
+ BASE_FEATURE(kVerifyStartupSigninState, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kVirtualKeyboardResizesContentTransientOvershootFix, base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -1018,7 +1018,7 @@ BASE_FEATURE(kWebAppShortEdgesCutoutMode, base::FEATURE_DISABLED_BY_DEFAULT);
+ // Shows only the remote device name on the Android notification instead of
+ // a descriptive text.
+ BASE_FEATURE(kWebOtpCrossDeviceSimpleString, base::FEATURE_DISABLED_BY_DEFAULT);
+-BASE_FEATURE(kWebUiAndroidTheming, BUILDFLAG(IS_DESKTOP_ANDROID) ? base::FEATURE_ENABLED_BY_DEFAULT : base::FEATURE_DISABLED_BY_DEFAULT);
++BASE_FEATURE(kWebUiAndroidTheming, base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kXplatSyncedSetupThemes, base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kYourSavedInfoSettingsPageAndroid, base::FEATURE_DISABLED_BY_DEFAULT);
+ // go/keep-sorted end
+diff --git a/components/omnibox/browser/autocomplete_classifier.cc b/components/omnibox/browser/autocomplete_classifier.cc
+index c54d8b5c0a..575bdc9786 100644
+--- a/components/omnibox/browser/autocomplete_classifier.cc
++++ b/components/omnibox/browser/autocomplete_classifier.cc
+@@ -69,7 +69,7 @@ int AutocompleteClassifier::DefaultOmniboxProviders(bool is_low_memory_device) {
+            ? AutocompleteProvider::Type::kRecentlyClosedTabs
+            : AutocompleteProvider::Type::kNone) |
+       AutocompleteProvider::Type::kContextualSearch |
+-#elif !BUILDFLAG(IS_DESKTOP_ANDROID)
++#else
+       AutocompleteProvider::Type::kClipboard |
+       AutocompleteProvider::Type::kMostVisitedSites |
+ #endif
+diff --git a/components/omnibox/browser/autocomplete_controller.cc b/components/omnibox/browser/autocomplete_controller.cc
+index e978d4b3f1..b99f9dbbdc 100644
+--- a/components/omnibox/browser/autocomplete_controller.cc
++++ b/components/omnibox/browser/autocomplete_controller.cc
+@@ -126,9 +126,7 @@ using ScoringSignals = ::metrics::OmniboxScoringSignals;
+ using ProviderType = AutocompleteProvider::Type;
+ using OEP = metrics::OmniboxEventProto;
+ 
+-constexpr bool kIsDesktop =
+-    !(BUILDFLAG(IS_IOS) ||
+-      (BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_DESKTOP_ANDROID)));
++constexpr bool kIsDesktop = !(BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID));
+ constexpr bool is_android = !!BUILDFLAG(IS_ANDROID);
+ 
+ void RecordMlScoreCoverage(size_t matches_with_non_null_scores,
+diff --git a/components/omnibox/browser/autocomplete_match.cc b/components/omnibox/browser/autocomplete_match.cc
+index 9d5970d9da..ad761f85a7 100644
+--- a/components/omnibox/browser/autocomplete_match.cc
++++ b/components/omnibox/browser/autocomplete_match.cc
+@@ -67,7 +67,7 @@
+ #endif
+ 
+ constexpr bool kIsAndroid = BUILDFLAG(IS_ANDROID);
+-constexpr bool kIsDesktopAndroid = BUILDFLAG(IS_DESKTOP_ANDROID);
++constexpr bool kIsDesktopAndroid = false;
+ constexpr bool kIsDesktop =
+     (!BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)) || kIsDesktopAndroid;
+ 
+diff --git a/components/omnibox/browser/autocomplete_result.cc b/components/omnibox/browser/autocomplete_result.cc
+index 0ec4c826bf..fbedd81ecb 100644
+--- a/components/omnibox/browser/autocomplete_result.cc
++++ b/components/omnibox/browser/autocomplete_result.cc
+@@ -79,7 +79,7 @@ using AutocompleteMatchType = omnibox::AutocompleteMatchType;
+ namespace {
+ 
+ constexpr bool is_android_any = !!BUILDFLAG(IS_ANDROID);
+-constexpr bool is_android_desktop = !!BUILDFLAG(IS_DESKTOP_ANDROID);
++constexpr bool is_android_desktop = false;
+ constexpr bool is_android_mobile = is_android_any && !is_android_desktop;
+ constexpr bool is_ios = !!BUILDFLAG(IS_IOS);
+ constexpr bool is_desktop = !(is_android_mobile || is_ios);
+diff --git a/components/omnibox/browser/zero_suggest_verbatim_match_provider.cc b/components/omnibox/browser/zero_suggest_verbatim_match_provider.cc
+index f377592161..cd4753f253 100644
+--- a/components/omnibox/browser/zero_suggest_verbatim_match_provider.cc
++++ b/components/omnibox/browser/zero_suggest_verbatim_match_provider.cc
+@@ -28,7 +28,7 @@
+ 
+ namespace {
+ constexpr bool is_android = !!BUILDFLAG(IS_ANDROID);
+-constexpr bool is_desktop_android = !!BUILDFLAG(IS_DESKTOP_ANDROID);
++constexpr bool is_desktop_android = false;
+ 
+ // Returns whether specific context is eligible for a verbatim match.
+ // Offers verbatim match for:

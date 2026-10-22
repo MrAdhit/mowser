@@ -1,0 +1,358 @@
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 74208304be..b949d25bad 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -1131,6 +1131,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/signin/ChildAccountStatusSupplier.java",
+   "java/src/org/chromium/chrome/browser/signin/FullscreenSigninAndHistorySyncActivityBase.java",
+   "java/src/org/chromium/chrome/browser/signin/LegacySyncPromoView.java",
++  "java/src/org/chromium/chrome/browser/signin/MicrogAccountManagerDelegate.java",
+   "java/src/org/chromium/chrome/browser/signin/PolicyLoadListener.java",
+   "java/src/org/chromium/chrome/browser/signin/SigninAndHistorySyncActivity.java",
+   "java/src/org/chromium/chrome/browser/signin/SigninAndHistorySyncActivityLauncherImpl.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/signin/MicrogAccountManagerDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/signin/MicrogAccountManagerDelegate.java
+new file mode 100644
+index 0000000000..8db64366c8
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/signin/MicrogAccountManagerDelegate.java
+@@ -0,0 +1,340 @@
++// Copyright 2026 The Mowser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.signin;
++
++import android.accounts.Account;
++import android.accounts.AccountManager;
++import android.accounts.AuthenticatorException;
++import android.accounts.OperationCanceledException;
++import android.app.Activity;
++import android.content.Context;
++import android.content.Intent;
++import android.net.Uri;
++import android.content.SharedPreferences;
++import android.os.Bundle;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.Parcelable;
++
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.base.Callback;
++import org.chromium.base.ContextUtils;
++import org.chromium.base.Log;
++import org.chromium.base.ThreadUtils;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.build.annotations.ServiceImpl;
++import org.chromium.components.signin.AccessTokenData;
++import org.chromium.components.signin.AccountManagerDelegate;
++import org.chromium.components.signin.AccountManagerDelegateException;
++import org.chromium.components.signin.AccountUtils;
++import org.chromium.components.signin.AccountsChangeObserver;
++import org.chromium.components.signin.AuthException;
++import org.chromium.google_apis.gaia.GaiaId;
++import org.chromium.net.ChromiumNetworkAdapter;
++import org.chromium.net.NetworkTrafficAnnotationTag;
++
++import java.io.ByteArrayOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.net.HttpURLConnection;
++import java.net.URL;
++import java.net.URLEncoder;
++import java.nio.charset.StandardCharsets;
++import java.util.Set;
++
++/**
++ * AccountManagerDelegate backed by MicroG-RE (app.revanced.android.gms).
++ *
++ * <p>Chromium refers to Google accounts with the "com.google" account type. MicroG-RE registers
++ * them as "app.revanced", so this class translates between the two whenever it talks to
++ * AccountManager. Access tokens are minted by MicroG-RE, which reports this app's identity to
++ * Google using the SPOOFED_PACKAGE_NAME and SPOOFED_PACKAGE_SIGNATURE meta-data in the manifest.
++ *
++ * <p>Accounts are listed through MicroG-RE's accounts content provider, which also makes each
++ * account visible to this app in AccountManager, as it does for apps using the Play services
++ * client library. The provider accepts callers holding GET_ACCOUNTS.
++ */
++@NullMarked
++@ServiceImpl(AccountManagerDelegate.class)
++public class MicrogAccountManagerDelegate implements AccountManagerDelegate {
++    private static final String TAG = "MicrogAccounts";
++    private static final String MICROG_ACCOUNT_TYPE = "app.revanced";
++    private static final Uri MICROG_ACCOUNTS_PROVIDER =
++            Uri.parse("content://app.revanced.android.gms.auth.accounts");
++    private static final String OAUTH2_PREFIX = "oauth2:";
++    private static final String GAIA_ID_SCOPE =
++            "oauth2:https://www.googleapis.com/auth/userinfo.email";
++    private static final String TOKENINFO_URL =
++            "https://oauth2.googleapis.com/tokeninfo?access_token=";
++    private static final String GAIA_ID_PREFS = "mowser_gaia_ids";
++
++    private static final NetworkTrafficAnnotationTag TRAFFIC_ANNOTATION =
++            NetworkTrafficAnnotationTag.createComplete(
++                    "mowser_microg_gaia_id_lookup",
++                    """
++                    semantics {
++                      sender: "MicroG account manager delegate"
++                      description:
++                        "Looks up the Gaia ID of a Google account provided by MicroG-RE, by "
++                        "sending an access token for that account to Google's tokeninfo "
++                        "endpoint."
++                      trigger: "Chromium needs the Gaia ID of an account it has not seen before."
++                      data: "An OAuth2 access token for the account."
++                      destination: GOOGLE_OWNED_SERVICE
++                    }
++                    policy {
++                      cookies_allowed: NO
++                      setting: "Not controlled by a setting; runs only for signed-in accounts."
++                      policy_exception_justification: "Required to sign in."
++                    }""");
++
++    /**
++     * Capabilities reported as present. They describe an ordinary adult personal account; every
++     * other capability, including parental supervision and enterprise management, is reported as
++     * absent. Names are those Chromium passes to {@link #hasCapability}.
++     */
++    private static final Set<String> GRANTED_CAPABILITIES =
++            Set.of(
++                    "haytqlldmfya", // can_have_email_address_displayed
++                    "giztambnmnqxa", // can_sign_in_to_chrome
++                    "gi2tklldmfya", // can_show_history_sync_opt_ins_without_minor_mode_restrictions
++                    "giztknjnmnqxa", // can_contextually_show_history_sync_opt_ins_...
++                    "gu2dqlldmfya", // can_run_chrome_privacy_sandbox_trials
++                    "gizdqmrnmnqxa", // can_submit_feedback_in_chrome
++                    "ge4tenznmnqxa", // can_make_chrome_search_engine_choice_screen_choice
++                    "g42tslldmfya", // is_allowed_for_machine_learning
++                    "gu4dmlldmfya"); // can_toggle_auto_updates
++
++    private final AccountManager mAccountManager;
++
++    public MicrogAccountManagerDelegate() {
++        mAccountManager = AccountManager.get(ContextUtils.getApplicationContext());
++    }
++
++    private static Account toMicrog(Account account) {
++        return new Account(account.name, MICROG_ACCOUNT_TYPE);
++    }
++
++    private static Account toChromium(Account account) {
++        return new Account(account.name, AccountUtils.GOOGLE_ACCOUNT_TYPE);
++    }
++
++    @Override
++    public void attachAccountsChangeObserver(AccountsChangeObserver observer) {
++        mAccountManager.addOnAccountsUpdatedListener(
++                accounts -> observer.onAccountsChanged(),
++                new Handler(Looper.getMainLooper()),
++                /* updateImmediately= */ false,
++                new String[] {MICROG_ACCOUNT_TYPE});
++    }
++
++    @Override
++    public Account[] getAccountsSynchronous() throws AccountManagerDelegateException {
++        Account[] microgAccounts = getAccountsFromProvider();
++        if (microgAccounts == null) {
++            microgAccounts = mAccountManager.getAccountsByType(MICROG_ACCOUNT_TYPE);
++        }
++        Account[] accounts = new Account[microgAccounts.length];
++        for (int i = 0; i < microgAccounts.length; i++) {
++            accounts[i] = toChromium(microgAccounts[i]);
++        }
++        Log.i(TAG, "%d MicroG-RE accounts visible", accounts.length);
++        return accounts;
++    }
++
++    /**
++     * Returns MicroG-RE's accounts from its accounts content provider, or null when the provider
++     * cannot be reached.
++     */
++    private static Account @Nullable [] getAccountsFromProvider() {
++        Bundle result;
++        try {
++            result =
++                    ContextUtils.getApplicationContext()
++                            .getContentResolver()
++                            .call(
++                                    MICROG_ACCOUNTS_PROVIDER,
++                                    "get_accounts",
++                                    MICROG_ACCOUNT_TYPE,
++                                    /* extras= */ null);
++        } catch (RuntimeException e) {
++            Log.w(TAG, "MicroG-RE accounts provider failed", e);
++            return null;
++        }
++        if (result == null) return null;
++        Parcelable[] parcelables = result.getParcelableArray("accounts");
++        if (parcelables == null) return null;
++        Account[] accounts = new Account[parcelables.length];
++        for (int i = 0; i < parcelables.length; i++) {
++            accounts[i] = (Account) parcelables[i];
++        }
++        return accounts;
++    }
++
++    @Override
++    public AccessTokenData getAccessToken(Account account, String authTokenScope)
++            throws AuthException {
++        String tokenType =
++                authTokenScope.startsWith(OAUTH2_PREFIX)
++                        ? authTokenScope
++                        : OAUTH2_PREFIX + authTokenScope;
++        try {
++            // When MicroG-RE needs the user's approval it returns no token and, because
++            // notifyAuthFailure is true, posts a notification that opens its approval screen.
++            String token =
++                    mAccountManager.blockingGetAuthToken(
++                            toMicrog(account), tokenType, /* notifyAuthFailure= */ true);
++            if (token == null) {
++                throw new AuthException(
++                        AuthException.NONTRANSIENT,
++                        "MicroG-RE returned no token; approval may be pending",
++                        new IOException("blockingGetAuthToken returned null"));
++            }
++            return new AccessTokenData(token);
++        } catch (AuthenticatorException | OperationCanceledException e) {
++            throw new AuthException(AuthException.NONTRANSIENT, e);
++        } catch (IOException e) {
++            throw new AuthException(AuthException.TRANSIENT, e);
++        }
++    }
++
++    @Override
++    public void invalidateAccessToken(String authToken) throws AuthException {
++        mAccountManager.invalidateAuthToken(MICROG_ACCOUNT_TYPE, authToken);
++    }
++
++    @Override
++    public @CapabilityResponse int hasCapability(@Nullable Account account, String capability) {
++        return GRANTED_CAPABILITIES.contains(capability)
++                ? CapabilityResponse.YES
++                : CapabilityResponse.NO;
++    }
++
++    @Override
++    public void createAddAccountIntent(
++            @Nullable String prefilledEmail, Callback<@Nullable Intent> callback) {
++        // The chooser runs in AccountManager's process, so it lists MicroG-RE accounts that are
++        // not yet visible to this app. Picking one makes it visible.
++        Intent intent =
++                AccountManager.newChooseAccountIntent(
++                        /* selectedAccount= */ null,
++                        /* allowableAccounts= */ null,
++                        new String[] {MICROG_ACCOUNT_TYPE},
++                        /* descriptionOverrideText= */ null,
++                        /* addAccountAuthTokenType= */ null,
++                        /* addAccountRequiredFeatures= */ null,
++                        /* addAccountOptions= */ null);
++        callback.onResult(intent);
++    }
++
++    @Override
++    public void updateCredentials(
++            Account account, Activity activity, @Nullable Callback<Boolean> callback) {
++        mAccountManager.updateCredentials(
++                toMicrog(account),
++                OAUTH2_PREFIX,
++                /* options= */ null,
++                activity,
++                future -> {
++                    boolean success = false;
++                    try {
++                        future.getResult();
++                        success = true;
++                    } catch (AuthenticatorException
++                            | OperationCanceledException
++                            | IOException e) {
++                        Log.w(TAG, "updateCredentials failed", e);
++                    }
++                    if (callback != null) {
++                        boolean result = success;
++                        ThreadUtils.runOnUiThread(callback.bind(result));
++                    }
++                },
++                new Handler(Looper.getMainLooper()));
++    }
++
++    /**
++     * Returns the account's Gaia ID, read from Google's tokeninfo endpoint and cached per email.
++     * Must run on a worker thread because it may perform network requests.
++     */
++    @Override
++    public @Nullable GaiaId getAccountGaiaId(String accountEmail) {
++        SharedPreferences prefs =
++                ContextUtils.getApplicationContext()
++                        .getSharedPreferences(GAIA_ID_PREFS, Context.MODE_PRIVATE);
++        String cached = prefs.getString(accountEmail, null);
++        if (cached != null) return new GaiaId(cached);
++
++        Account account = new Account(accountEmail, MICROG_ACCOUNT_TYPE);
++        try {
++            String token =
++                    mAccountManager.blockingGetAuthToken(
++                            account, GAIA_ID_SCOPE, /* notifyAuthFailure= */ true);
++            if (token == null) {
++                Log.w(TAG, "Gaia ID lookup got no token; MicroG-RE approval may be pending");
++                return null;
++            }
++            String gaiaId = fetchGaiaId(token);
++            if (gaiaId == null) return null;
++            prefs.edit().putString(accountEmail, gaiaId).apply();
++            return new GaiaId(gaiaId);
++        } catch (AuthenticatorException | OperationCanceledException | IOException e) {
++            Log.w(TAG, "Gaia ID lookup failed", e);
++            return null;
++        }
++    }
++
++    private static @Nullable String fetchGaiaId(String token) throws IOException {
++        URL url = new URL(TOKENINFO_URL + URLEncoder.encode(token, "UTF-8"));
++        HttpURLConnection connection =
++                (HttpURLConnection) ChromiumNetworkAdapter.openConnection(url, TRAFFIC_ANNOTATION);
++        try {
++            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
++                Log.w(TAG, "tokeninfo returned HTTP %d", connection.getResponseCode());
++                return null;
++            }
++            try (InputStream in = connection.getInputStream()) {
++                ByteArrayOutputStream body = new ByteArrayOutputStream();
++                byte[] buffer = new byte[4096];
++                int read;
++                while ((read = in.read(buffer)) != -1) {
++                    body.write(buffer, 0, read);
++                }
++                JSONObject json = new JSONObject(body.toString(StandardCharsets.UTF_8.name()));
++                return json.has("sub") ? json.getString("sub") : null;
++            } catch (JSONException e) {
++                Log.w(TAG, "tokeninfo response is not JSON", e);
++                return null;
++            }
++        } finally {
++            connection.disconnect();
++        }
++    }
++
++    @Override
++    public void confirmCredentials(
++            Account account, @Nullable Activity activity, Callback<@Nullable Bundle> callback) {
++        mAccountManager.confirmCredentials(
++                toMicrog(account),
++                /* options= */ null,
++                activity,
++                future -> {
++                    Bundle result = null;
++                    try {
++                        result = future.getResult();
++                    } catch (AuthenticatorException
++                            | OperationCanceledException
++                            | IOException e) {
++                        Log.w(TAG, "confirmCredentials failed", e);
++                    }
++                    Bundle finalResult = result;
++                    ThreadUtils.runOnUiThread(callback.bind(finalResult));
++                },
++                new Handler(Looper.getMainLooper()));
++    }
++}
