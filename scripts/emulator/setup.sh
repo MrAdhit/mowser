@@ -23,10 +23,11 @@ echo "authorized client adb key"
 "$adb" shell setprop pm.dexopt.install extract
 "$adb" shell setprop pm.dexopt.bg-dexopt extract
 
-url=$(curl -fsSL https://api.github.com/repos/ReVanced/GmsCore/releases/latest \
+url=$(curl -fsSL --retry 5 --retry-all-errors \
+  https://api.github.com/repos/ReVanced/GmsCore/releases/latest \
   | grep -oE '"browser_download_url": *"[^"]+\.apk"' | grep -v -i hw | head -1 | cut -d'"' -f4)
 echo "installing $url"
-curl -fsSL -o /tmp/microg.apk "$url"
+curl -fsSL --retry 5 --retry-all-errors -o /tmp/microg.apk "$url"
 if ! bash /emulator/install.sh /tmp/microg.apk; then
   "$ANDROID_HOME/platform-tools/adb" logcat -d -b system,crash,main 2>/dev/null \
     | grep -iE "watchdog|FATAL EXCEPTION|system_server|died|Blocked in" | tail -25

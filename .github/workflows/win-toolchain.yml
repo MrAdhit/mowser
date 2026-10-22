@@ -19,7 +19,8 @@ jobs:
         shell: bash
         run: |
           url="https://chromium.googlesource.com/chromium/src/+/refs/tags/$(cat chromium-version)"
-          sdk=$(curl -fsSL "${url}/build/vs_toolchain.py?format=TEXT" | base64 -d \
+          sdk=$(curl -fsSL --retry 5 --retry-all-errors \
+            "${url}/build/vs_toolchain.py?format=TEXT" | base64 -d \
             | sed -n "s/^SDK_VERSION = '\(.*\)'/\1/p")
           echo "SDK_VERSION=${sdk}" >> "$GITHUB_ENV"
           echo "Windows SDK ${sdk}"

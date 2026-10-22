@@ -14,7 +14,7 @@ out="$(realpath -m "$1")"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-curl -fsSL -o "$tmp/ubo.zip" \
+curl -fsSL --retry 5 --retry-all-errors -o "$tmp/ubo.zip" \
   "https://github.com/gorhill/uBlock/releases/download/${UBO_VERSION}/uBlock0_${UBO_VERSION}.chromium.zip"
 echo "${UBO_SHA256}  $tmp/ubo.zip" | sha256sum -c --quiet
 

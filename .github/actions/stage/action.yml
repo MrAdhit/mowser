@@ -72,7 +72,8 @@ runs:
       shell: bash
       run: |
         url="https://chromium.googlesource.com/chromium/src/+/refs/tags/${CHROMIUM_VERSION}"
-        curl -fsSL "${url}/build/install-build-deps.py?format=TEXT" | base64 -d \
+        curl -fsSL --retry 5 --retry-all-errors \
+          "${url}/build/install-build-deps.py?format=TEXT" | base64 -d \
           > "$RUNNER_TEMP/install-build-deps.py"
         extra=""
         case "${{ inputs.target }}" in android-*) extra="--android" ;; esac
@@ -93,7 +94,8 @@ runs:
       shell: bash
       run: |
         url="https://chromium.googlesource.com/chromium/src/+/refs/tags/${CHROMIUM_VERSION}"
-        hash=$(curl -fsSL "${url}/build/vs_toolchain.py?format=TEXT" | base64 -d \
+        hash=$(curl -fsSL --retry 5 --retry-all-errors \
+          "${url}/build/vs_toolchain.py?format=TEXT" | base64 -d \
           | sed -n "s/^TOOLCHAIN_HASH = '\(.*\)'/\1/p")
         echo "DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL=$PWD/win-toolchain" >> "$GITHUB_ENV"
         echo "GYP_MSVS_HASH_${hash}=$(cat win-toolchain/name.txt)" >> "$GITHUB_ENV"
