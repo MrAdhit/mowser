@@ -1,107 +1,127 @@
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+index d98c86e..ae8dca6 100644
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -379,6 +379,7 @@ if (!is_android && !is_mac) {
+     # forces all C++ compilations in chrome_initial to wait for resources.pak.
+     # Instead, group("chrome") exposes it via public_deps for installers.
+     data_deps += [ ":packed_resources" ]
++    data_deps += [ "//mowser:ublock_origin" ]
+ 
+     # ChromeOS by design is safe to have rpath=$ORIGIN. This simplifies shared
+     # library usage.
+@@ -1099,6 +1100,7 @@ if (is_win) {
+       ":packed_resources",
+       "//chrome/app_shim:app_mode_loader_plist_bundle_data",
+       "//chrome/browser/mac:install",
++      "//mowser:ublock_origin_bundle_data",
+     ]
+ 
+     if (icu_use_data_file) {
 diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
-index 6ed7920..7747105 100644
+index 6ed7920..7fb96b6 100644
 --- a/chrome/android/BUILD.gn
 +++ b/chrome/android/BUILD.gn
 @@ -1844,6 +1844,7 @@ if (_is_default_toolchain) {
  
    java_group("chrome_public_non_pak_assets") {
      deps = [
-+      "//chrome/android/mowser:ublock_origin_assets",
++      "//mowser:ublock_origin_assets",
        "//chrome/android/webapk/libs/runtime_library:runtime_library_assets",
        "//components/privacy_sandbox/privacy_sandbox_attestations/preload:privacy_sandbox_attestations_assets",
      ]
-diff --git a/chrome/android/mowser/BUILD.gn b/chrome/android/mowser/BUILD.gn
-new file mode 100644
-index 0000000..ab4ae58
---- /dev/null
-+++ b/chrome/android/mowser/BUILD.gn
-@@ -0,0 +1,13 @@
-+# Copyright 2026 The Mowser Authors
-+# Use of this source code is governed by a BSD-style license that can be
-+# found in the LICENSE file.
-+
-+import("//build/config/android/rules.gni")
-+
-+# uBlock Origin, which ComponentLoader::AddUBlockOrigin() loads. scripts/ubo.sh
-+# writes ublock_origin.zip before the build. The asset is stored uncompressed
-+# so that it can be read through base::android::OpenApkAsset().
-+android_assets("ublock_origin_assets") {
-+  sources = [ "ublock_origin.zip" ]
-+  disable_compression = true
-+}
 diff --git a/chrome/browser/extensions/component_extensions_allowlist/allowlist.cc b/chrome/browser/extensions/component_extensions_allowlist/allowlist.cc
-index 4fb8aaa..46e2420 100644
+index 4fb8aaa..6919330 100644
 --- a/chrome/browser/extensions/component_extensions_allowlist/allowlist.cc
 +++ b/chrome/browser/extensions/component_extensions_allowlist/allowlist.cc
-@@ -56,6 +56,9 @@ bool IsComponentExtensionAllowlisted(const std::string& extension_id) {
+@@ -56,6 +56,7 @@ bool IsComponentExtensionAllowlisted(const std::string& extension_id) {
  #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
  #endif  // BUILDFLAG(IS_CHROMEOS)
        extension_misc::kReadingModeGDocsHelperExtensionId,
-+#if BUILDFLAG(IS_ANDROID)
 +      extension_misc::kUBlockOriginExtensionId,
-+#endif  // BUILDFLAG(IS_ANDROID)
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
        extension_misc::kTTSEngineExtensionId,
        extension_misc::kComponentUpdaterTTSEngineExtensionId,
 diff --git a/chrome/browser/extensions/component_loader.cc b/chrome/browser/extensions/component_loader.cc
-index 54969ee..5d04d65 100644
+index 54969ee..24cba78 100644
 --- a/chrome/browser/extensions/component_loader.cc
 +++ b/chrome/browser/extensions/component_loader.cc
-@@ -11,6 +11,8 @@
+@@ -10,7 +10,11 @@
+ 
  #include "base/command_line.h"
  #include "base/feature_list.h"
++#include "base/base_paths.h"
  #include "base/files/file_util.h"
++#include "base/files/scoped_temp_file.h"
 +#include "base/hash/hash.h"
 +#include "base/strings/string_number_conversions.h"
  #include "base/functional/bind.h"
  #include "base/functional/callback.h"
  #include "base/functional/callback_helpers.h"
-@@ -70,6 +72,13 @@
+@@ -68,8 +72,14 @@
+ #include "printing/buildflags/buildflags.h"
+ #include "ui/accessibility/accessibility_features.h"
  #include "ui/base/l10n/l10n_util.h"
++#include "third_party/zlib/google/zip.h"
  #include "ui/base/resource/resource_bundle.h"
  
 +#if BUILDFLAG(IS_ANDROID)
 +#include "base/android/apk_assets.h"
 +#include "base/files/file.h"
-+#include "base/files/scoped_temp_file.h"
-+#include "third_party/zlib/google/zip.h"
 +#endif  // BUILDFLAG(IS_ANDROID)
 +
  #if BUILDFLAG(IS_CHROMEOS)
  #include "ash/constants/ash_extension_constants.h"
  #include "ash/constants/ash_features.h"
-@@ -403,6 +412,74 @@ ExtensionId ComponentLoader::AddOrReplace(const base::FilePath& path) {
+@@ -403,6 +413,90 @@ ExtensionId ComponentLoader::AddOrReplace(const base::FilePath& path) {
    return Add(std::move(*manifest), absolute_path, true);
  }
  
-+#if BUILDFLAG(IS_ANDROID)
 +namespace {
 +
-+// Unpacks the APK asset assets/ublock_origin.zip into `dir` unless `dir`
-+// already holds that zip's contents, as recorded in a stamp file holding a hash
-+// of the zip, then loads and localizes the extension's manifest. Returns the
-+// manifest, or nullopt on failure.
-+std::optional<base::DictValue> UnpackUBlockOrigin(const base::FilePath& dir) {
++// Returns the bundled uBlock Origin zip: the APK asset assets/ublock_origin.zip
++// on Android, and ublock_origin.zip in base::DIR_ASSETS elsewhere.
++std::optional<std::vector<uint8_t>> ReadUBlockOriginZip() {
++#if BUILDFLAG(IS_ANDROID)
 +  base::MemoryMappedFile::Region region;
 +  base::File asset(
 +      base::android::OpenApkAsset("assets/ublock_origin.zip", &region));
 +  if (!asset.IsValid()) {
-+    LOG(ERROR) << "uBlock Origin is missing from the APK";
 +    return std::nullopt;
 +  }
 +  std::vector<uint8_t> zip(region.size);
 +  if (!asset.ReadAndCheck(region.offset, zip)) {
-+    LOG(ERROR) << "Failed to read uBlock Origin from the APK";
++    return std::nullopt;
++  }
++  return zip;
++#else
++  base::FilePath assets;
++  if (!base::PathService::Get(base::DIR_ASSETS, &assets)) {
++    return std::nullopt;
++  }
++  return base::ReadFileToBytes(
++      assets.Append(FILE_PATH_LITERAL("ublock_origin.zip")));
++#endif  // BUILDFLAG(IS_ANDROID)
++}
++
++// Unpacks the bundled uBlock Origin zip into `dir` unless `dir` already holds
++// that zip's contents, as recorded in a stamp file holding a hash of the zip,
++// then loads and localizes the extension's manifest. Returns the manifest, or
++// nullopt on failure.
++std::optional<base::DictValue> UnpackUBlockOrigin(const base::FilePath& dir) {
++  std::optional<std::vector<uint8_t>> zip = ReadUBlockOriginZip();
++  if (!zip) {
++    LOG(ERROR) << "Failed to read the bundled uBlock Origin";
 +    return std::nullopt;
 +  }
 +
 +  const base::FilePath stamp_path = dir.Append(FILE_PATH_LITERAL(".bundle"));
-+  const std::string stamp = base::NumberToString(base::PersistentHash(zip));
++  const std::string stamp = base::NumberToString(base::PersistentHash(*zip));
 +  std::string current_stamp;
 +  if (!base::ReadFileToString(stamp_path, &current_stamp) ||
 +      current_stamp != stamp) {
 +    base::ScopedTempFile zip_file;
-+    if (!zip_file.Create() || !base::WriteFile(zip_file.path(), zip) ||
++    if (!zip_file.Create() || !base::WriteFile(zip_file.path(), *zip) ||
 +        !base::DeletePathRecursively(dir) || !base::CreateDirectory(dir) ||
 +        !zip::Unzip(zip_file.path(), dir) ||
 +        !base::WriteFile(stamp_path, stamp)) {
@@ -140,35 +160,30 @@ index 54969ee..5d04d65 100644
 +          },
 +          weak_factory_.GetWeakPtr(), dir));
 +}
-+#endif  // BUILDFLAG(IS_ANDROID)
 +
  void ComponentLoader::Reload(const ExtensionId& extension_id) {
    for (const auto& component_extension : component_extensions_) {
      if (component_extension.extension_id == extension_id) {
-@@ -754,6 +831,10 @@ void ComponentLoader::AddDefaultComponentExtensionsWithBackgroundPages(
+@@ -754,6 +848,8 @@ void ComponentLoader::AddDefaultComponentExtensionsWithBackgroundPages(
      return;
    }
  
-+#if BUILDFLAG(IS_ANDROID)
 +  AddUBlockOrigin();
-+#endif  // BUILDFLAG(IS_ANDROID)
 +
    if (!skip_session_components) {
  #if BUILDFLAG(IS_CHROMEOS)
      Add(IDR_ECHO_MANIFEST,
 diff --git a/chrome/browser/extensions/component_loader.h b/chrome/browser/extensions/component_loader.h
-index 0a47e6a..f377062 100644
+index 0a47e6a..4f2dc86 100644
 --- a/chrome/browser/extensions/component_loader.h
 +++ b/chrome/browser/extensions/component_loader.h
-@@ -239,6 +239,12 @@ class ComponentLoader : public KeyedService {
+@@ -239,6 +239,10 @@ class ComponentLoader : public KeyedService {
  
    void AddContextualTasksExtension();
  
-+#if BUILDFLAG(IS_ANDROID)
-+  // Loads uBlock Origin from the APK asset assets/ublock_origin.zip, which is
-+  // unpacked into the profile directory when it changes.
++  // Loads the bundled uBlock Origin, which is unpacked into the profile
++  // directory whenever the bundled zip changes.
 +  void AddUBlockOrigin();
-+#endif  // BUILDFLAG(IS_ANDROID)
 +
    void AddWithNameAndDescription(int manifest_resource_id,
                                   const base::FilePath& root_directory,
@@ -202,20 +217,52 @@ index 3f93369..450d231 100644
      uncompiled_sources_ += [
        "chromeos_info_private.json",
 diff --git a/chrome/common/extensions/extension_constants.h b/chrome/common/extensions/extension_constants.h
-index 6e342e2..9770e19 100644
+index 6e342e2..71b8b4f 100644
 --- a/chrome/common/extensions/extension_constants.h
 +++ b/chrome/common/extensions/extension_constants.h
-@@ -198,6 +198,13 @@ inline constexpr char kReadingModeGDocsHelperExtensionId[] =
+@@ -198,6 +198,11 @@ inline constexpr char kReadingModeGDocsHelperExtensionId[] =
  // The path to the the helper extension for Reading Mode to work on Google Docs.
  inline constexpr char kReadingModeGDocsHelperExtensionPath[] = "accessibility";
  
-+#if BUILDFLAG(IS_ANDROID)
 +// The extension id of uBlock Origin as bundled in Mowser, set by the "key" that
 +// scripts/ubo.sh adds to its manifest.
 +inline constexpr char kUBlockOriginExtensionId[] =
 +    "cbnhekcmihffpmkhiolglckkhmplkhpe";
-+#endif  // BUILDFLAG(IS_ANDROID)
 +
  // The directory name of the AIM Eligibility component extension, relative to
  // DIR_COMPONENT_USER, when updated via component updater, or DIR_RESOURCES,
  // when bundled.
+diff --git a/mowser/BUILD.gn b/mowser/BUILD.gn
+new file mode 100644
+index 0000000..1c1fe15
+--- /dev/null
++++ b/mowser/BUILD.gn
+@@ -0,0 +1,28 @@
++# Copyright 2026 The Mowser Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# uBlock Origin, which ComponentLoader::AddUBlockOrigin() loads. scripts/ubo.sh
++# writes ublock_origin.zip before the build.
++
++if (is_android) {
++  import("//build/config/android/rules.gni")
++
++  # Stored uncompressed so that base::android::OpenApkAsset() can read it.
++  android_assets("ublock_origin_assets") {
++    sources = [ "ublock_origin.zip" ]
++    disable_compression = true
++  }
++} else if (is_mac) {
++  # Copied into the framework bundle's Resources, which is base::DIR_ASSETS.
++  bundle_data("ublock_origin_bundle_data") {
++    sources = [ "ublock_origin.zip" ]
++    outputs = [ "{{bundle_resources_dir}}/{{source_file_part}}" ]
++  }
++} else {
++  # Copied next to the executable, which is base::DIR_ASSETS.
++  copy("ublock_origin") {
++    sources = [ "ublock_origin.zip" ]
++    outputs = [ "$root_out_dir/{{source_file_part}}" ]
++  }
++}

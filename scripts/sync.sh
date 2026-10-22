@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # Fetches Chromium $CHROMIUM_VERSION into $MOWSER_WORK/src (default /work/src) and runs the
-# gclient hooks. MOWSER_SYNC_JOBS sets the number of parallel fetches (default: CPU count);
-# googlesource.com answers HTTP 429 when one address opens too many.
+# gclient hooks. MOWSER_TARGET_OS lists the operating systems whose dependencies are fetched
+# besides the host's (default "android"). MOWSER_SYNC_JOBS sets the number of parallel fetches
+# (default: CPU count); googlesource.com answers HTTP 429 when one address opens too many.
 set -euo pipefail
 
 work="${MOWSER_WORK:-/work}"
+target_os=""
+for os in ${MOWSER_TARGET_OS-android}; do
+  target_os+="\"${os}\", "
+done
 
 mkdir -p "$work"
 cd "$work"
-cat > .gclient <<'EOF'
+cat > .gclient <<EOF
 solutions = [
   {
     "name": "src",
@@ -18,7 +23,7 @@ solutions = [
     "custom_vars": {},
   },
 ]
-target_os = ["android"]
+target_os = [${target_os}]
 EOF
 
 if [ -d src/.git ]; then

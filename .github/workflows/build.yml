@@ -1,0 +1,59 @@
+# Builds Mowser for the selected platforms. Android, Linux and Windows build on Linux runners
+# (Windows by cross-compiling, with the toolchain from win-toolchain.yml); macOS builds on macOS
+# runners. Each finished build is uploaded as the mowser-<target> artifact.
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      android:
+        description: Android (phones and tablets)
+        type: boolean
+        default: true
+      linux:
+        description: Linux
+        type: boolean
+        default: true
+      windows:
+        description: Windows
+        type: boolean
+        default: true
+      macos:
+        description: macOS
+        type: boolean
+        default: true
+
+jobs:
+  android:
+    if: inputs.android
+    uses: ./.github/workflows/stages.yml
+    with:
+      target: android-arm64
+      target-os: android
+      runner: ubuntu-24.04
+    secrets: inherit
+
+  linux:
+    if: inputs.linux
+    uses: ./.github/workflows/stages.yml
+    with:
+      target: linux-x64
+      runner: ubuntu-24.04
+    secrets: inherit
+
+  windows:
+    if: inputs.windows
+    uses: ./.github/workflows/stages.yml
+    with:
+      target: win-x64
+      target-os: win
+      runner: ubuntu-24.04
+    secrets: inherit
+
+  macos:
+    if: inputs.macos
+    uses: ./.github/workflows/stages.yml
+    with:
+      target: mac-arm64
+      runner: macos-15
+    secrets: inherit

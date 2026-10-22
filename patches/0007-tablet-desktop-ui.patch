@@ -1,0 +1,19 @@
+diff --git a/base/android/java/src/org/chromium/base/DeviceInfo.java b/base/android/java/src/org/chromium/base/DeviceInfo.java
+index 66bf313..b552dab 100644
+--- a/base/android/java/src/org/chromium/base/DeviceInfo.java
++++ b/base/android/java/src/org/chromium/base/DeviceInfo.java
+@@ -527,7 +527,13 @@ public final class DeviceInfo {
+                                                 : pm.hasSystemFeature(
+                                                         PackageManager.FEATURE_PC))) // nocheck
+                                 || CommandLine.getInstance()
+-                                        .hasSwitch(BaseSwitches.FORCE_DESKTOP_ANDROID);
++                                        .hasSwitch(BaseSwitches.FORCE_DESKTOP_ANDROID)
++                                // Mowser shows the desktop UI on tablets: devices whose smallest
++                                // screen width is at least Chromium's 600dp tablet threshold.
++                                || appContext.getResources()
++                                                .getConfiguration()
++                                                .smallestScreenWidthDp
++                                        >= 600;
+ 
+         // Detect whether device is foldable. The system feature alone is not sufficient: emulator
+         // system images declare FEATURE_SENSOR_HINGE_ANGLE in

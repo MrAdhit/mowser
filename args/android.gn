@@ -1,0 +1,7 @@
+target_os = "android"
+
+# Chromium compiles its extensions system for Android only in the desktop Android
+# configuration. Mowser uses it for the bundled uBlock Origin and synced extensions, and
+# keeps the phone UI on phones (patches/0005-desktop-android-phone-ui.patch) and the desktop
+# UI on tablets (patches/0007-tablet-desktop-ui.patch).
+is_desktop_android = true

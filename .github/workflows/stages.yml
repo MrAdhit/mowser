@@ -1,0 +1,177 @@
+# Builds one target in up to 8 chained stages. Each stage builds for up to about five hours
+# and passes its build output to the next stage through the state-<target> artifact.
+name: stages
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        required: true
+      target-os:
+        type: string
+        required: false
+        default: ""
+      runner:
+        type: string
+        required: true
+
+jobs:
+  stage1:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 355
+    outputs:
+      done: ${{ steps.stage.outputs.done }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: stage
+        uses: ./.github/actions/stage
+        with:
+          target: ${{ inputs.target }}
+          target-os: ${{ inputs.target-os }}
+          resume: 'false'
+          google-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
+          google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+
+  stage2:
+    needs: stage1
+    if: ${{ !cancelled() && needs.stage1.outputs.done == 'false' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 355
+    outputs:
+      done: ${{ steps.stage.outputs.done }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: stage
+        uses: ./.github/actions/stage
+        with:
+          target: ${{ inputs.target }}
+          target-os: ${{ inputs.target-os }}
+          resume: 'true'
+          google-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
+          google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+
+  stage3:
+    needs: stage2
+    if: ${{ !cancelled() && needs.stage2.outputs.done == 'false' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 355
+    outputs:
+      done: ${{ steps.stage.outputs.done }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: stage
+        uses: ./.github/actions/stage
+        with:
+          target: ${{ inputs.target }}
+          target-os: ${{ inputs.target-os }}
+          resume: 'true'
+          google-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
+          google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+
+  stage4:
+    needs: stage3
+    if: ${{ !cancelled() && needs.stage3.outputs.done == 'false' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 355
+    outputs:
+      done: ${{ steps.stage.outputs.done }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: stage
+        uses: ./.github/actions/stage
+        with:
+          target: ${{ inputs.target }}
+          target-os: ${{ inputs.target-os }}
+          resume: 'true'
+          google-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
+          google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+
+  stage5:
+    needs: stage4
+    if: ${{ !cancelled() && needs.stage4.outputs.done == 'false' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 355
+    outputs:
+      done: ${{ steps.stage.outputs.done }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: stage
+        uses: ./.github/actions/stage
+        with:
+          target: ${{ inputs.target }}
+          target-os: ${{ inputs.target-os }}
+          resume: 'true'
+          google-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
+          google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+
+  stage6:
+    needs: stage5
+    if: ${{ !cancelled() && needs.stage5.outputs.done == 'false' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 355
+    outputs:
+      done: ${{ steps.stage.outputs.done }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: stage
+        uses: ./.github/actions/stage
+        with:
+          target: ${{ inputs.target }}
+          target-os: ${{ inputs.target-os }}
+          resume: 'true'
+          google-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
+          google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+
+  stage7:
+    needs: stage6
+    if: ${{ !cancelled() && needs.stage6.outputs.done == 'false' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 355
+    outputs:
+      done: ${{ steps.stage.outputs.done }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: stage
+        uses: ./.github/actions/stage
+        with:
+          target: ${{ inputs.target }}
+          target-os: ${{ inputs.target-os }}
+          resume: 'true'
+          google-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
+          google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+
+  stage8:
+    needs: stage7
+    if: ${{ !cancelled() && needs.stage7.outputs.done == 'false' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 355
+    outputs:
+      done: ${{ steps.stage.outputs.done }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: stage
+        uses: ./.github/actions/stage
+        with:
+          target: ${{ inputs.target }}
+          target-os: ${{ inputs.target-os }}
+          resume: 'true'
+          google-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
+          google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+
+  unfinished:
+    needs: stage8
+    if: ${{ !cancelled() && needs.stage8.outputs.done == 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::error::${{ inputs.target }} did not finish in 8 stages."
+          exit 1

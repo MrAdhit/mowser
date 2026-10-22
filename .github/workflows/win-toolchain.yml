@@ -1,0 +1,56 @@
+# Packages Visual Studio and the Windows SDK that Chromium's Windows build needs, with
+# depot_tools' package_from_installed.py, and saves the package to the Actions cache as
+# win-toolchain-<hash of chromium-version>. The Windows build in build.yml cross-compiles on
+# Linux with it. The cache entry is dropped after seven days without use, and must be made
+# again for each Chromium version.
+name: win-toolchain
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the SDK version Chromium expects
+        shell: bash
+        run: |
+          url="https://chromium.googlesource.com/chromium/src/+/refs/tags/$(cat chromium-version)"
+          sdk=$(curl -fsSL "${url}/build/vs_toolchain.py?format=TEXT" | base64 -d \
+            | sed -n "s/^SDK_VERSION = '\(.*\)'/\1/p")
+          echo "SDK_VERSION=${sdk}" >> "$GITHUB_ENV"
+          echo "Windows SDK ${sdk}"
+
+      - name: Install the Windows SDK
+        shell: pwsh
+        run: |
+          $include = "${env:ProgramFiles(x86)}\Windows Kits\10\Include\$env:SDK_VERSION"
+          if (Test-Path $include) {
+            Write-Output "Windows SDK $env:SDK_VERSION is installed."
+          } else {
+            $id = "Microsoft.WindowsSDK." + ($env:SDK_VERSION -replace '\.0$', '')
+            winget install --id $id --exact --silent --accept-package-agreements `
+              --accept-source-agreements --disable-interactivity
+            if (-not (Test-Path $include)) { throw "Windows SDK $env:SDK_VERSION is missing." }
+          }
+
+      - name: Package the toolchain
+        shell: bash
+        run: |
+          git clone --depth 1 \
+            https://chromium.googlesource.com/chromium/tools/depot_tools.git "$RUNNER_TEMP/depot_tools"
+          mkdir -p win-toolchain
+          cd win-toolchain
+          python "$RUNNER_TEMP/depot_tools/win_toolchain/package_from_installed.py" 2022 \
+            -w "$SDK_VERSION" --noarm
+          ls -l
+          basename "$(ls *.zip)" .zip > name.txt
+
+      - uses: actions/cache/save@v6
+        with:
+          path: win-toolchain
+          key: win-toolchain-${{ hashFiles('chromium-version') }}
+          enableCrossOsArchive: true

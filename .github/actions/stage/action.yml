@@ -1,0 +1,169 @@
+name: Build stage
+description: >
+  Builds one target for up to about five hours. Resumes from the target's state artifact when
+  one exists, and either uploads the finished package or saves the state for the next stage.
+
+inputs:
+  target:
+    description: Target to build, as in scripts/build.sh, e.g. android-arm64.
+    required: true
+  target-os:
+    description: Operating systems whose dependencies are fetched besides the host's.
+    required: false
+    default: ""
+  resume:
+    description: Whether to resume from the target's state artifact.
+    required: true
+  google-api-key:
+    required: false
+    default: ""
+  google-client-id:
+    required: false
+    default: ""
+  google-client-secret:
+    required: false
+    default: ""
+
+outputs:
+  done:
+    description: Whether the build finished.
+    value: ${{ steps.build.outputs.done }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare the runner
+      shell: bash
+      run: |
+        # The build stops at this time so that the state can be saved within the job's
+        # 355-minute limit.
+        echo "MOWSER_DEADLINE=$(( $(date +%s) + 290 * 60 ))" >> "$GITHUB_ENV"
+        if [ "$RUNNER_OS" = Linux ]; then
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force > /dev/null || true
+          # The temporary disk at /mnt is the largest on Linux runners.
+          sudo mkdir -p /mnt/mowser && sudo chown "$USER" /mnt/mowser
+          echo "MOWSER_ROOT=/mnt/mowser" >> "$GITHUB_ENV"
+        else
+          sudo rm -rf "$ANDROID_HOME" "$HOME/Library/Android"
+          brew install --quiet coreutils findutils gnu-tar zstd
+          for tool in coreutils findutils gnu-tar; do
+            echo "$(brew --prefix "$tool")/libexec/gnubin" >> "$GITHUB_PATH"
+          done
+          mkdir -p "$HOME/mowser"
+          echo "MOWSER_ROOT=$HOME/mowser" >> "$GITHUB_ENV"
+        fi
+        df -h
+
+    - name: Set up depot_tools
+      shell: bash
+      run: |
+        git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git \
+          "$MOWSER_ROOT/depot_tools"
+        echo "$MOWSER_ROOT/depot_tools" >> "$GITHUB_PATH"
+        echo "DEPOT_TOOLS_UPDATE=0" >> "$GITHUB_ENV"
+        echo "CHROMIUM_VERSION=$(cat chromium-version)" >> "$GITHUB_ENV"
+        echo "MOWSER_WORK=$MOWSER_ROOT/work" >> "$GITHUB_ENV"
+        echo "MOWSER_OUT=$MOWSER_ROOT/packages" >> "$GITHUB_ENV"
+
+    - name: Install build dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        url="https://chromium.googlesource.com/chromium/src/+/refs/tags/${CHROMIUM_VERSION}"
+        curl -fsSL "${url}/build/install-build-deps.py?format=TEXT" | base64 -d \
+          > "$RUNNER_TEMP/install-build-deps.py"
+        extra=""
+        case "${{ inputs.target }}" in android-*) extra="--android" ;; esac
+        sudo python3 "$RUNNER_TEMP/install-build-deps.py" --no-prompt --no-chromeos-fonts \
+          --no-arm --no-nacl $extra
+
+    - name: Restore the Windows toolchain
+      if: startsWith(inputs.target, 'win-')
+      uses: actions/cache/restore@v6
+      with:
+        path: win-toolchain
+        key: win-toolchain-${{ hashFiles('chromium-version') }}
+        enableCrossOsArchive: true
+        fail-on-cache-miss: true
+
+    - name: Point gclient at the Windows toolchain
+      if: startsWith(inputs.target, 'win-')
+      shell: bash
+      run: |
+        url="https://chromium.googlesource.com/chromium/src/+/refs/tags/${CHROMIUM_VERSION}"
+        hash=$(curl -fsSL "${url}/build/vs_toolchain.py?format=TEXT" | base64 -d \
+          | sed -n "s/^TOOLCHAIN_HASH = '\(.*\)'/\1/p")
+        echo "DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL=$PWD/win-toolchain" >> "$GITHUB_ENV"
+        echo "GYP_MSVS_HASH_${hash}=$(cat win-toolchain/name.txt)" >> "$GITHUB_ENV"
+
+    - name: Sync Chromium
+      shell: bash
+      env:
+        MOWSER_TARGET_OS: ${{ inputs.target-os }}
+        MOWSER_SYNC_JOBS: "8"
+      run: bash scripts/sync.sh
+
+    - name: Download the build state
+      if: inputs.resume == 'true'
+      uses: actions/download-artifact@v8
+      with:
+        name: state-${{ inputs.target }}
+        path: ${{ env.MOWSER_ROOT }}/state
+
+    - name: Restore the build state
+      if: inputs.resume == 'true'
+      shell: bash
+      run: |
+        mkdir -p "$MOWSER_WORK/src/out"
+        tar -C "$MOWSER_WORK/src/out" --zstd -xf "$MOWSER_ROOT/state/state.tar.zst"
+        rm -rf "$MOWSER_ROOT/state"
+        df -h
+
+    - name: Build
+      id: build
+      shell: bash
+      env:
+        MOWSER_TARGETS: ${{ inputs.target }}
+        MOWSER_GOOGLE_API_KEY: ${{ inputs.google-api-key }}
+        MOWSER_GOOGLE_CLIENT_ID: ${{ inputs.google-client-id }}
+        MOWSER_GOOGLE_CLIENT_SECRET: ${{ inputs.google-client-secret }}
+      run: |
+        rm -rf "$MOWSER_WORK/patches" "$MOWSER_WORK/args"
+        cp -r patches args "$MOWSER_WORK/"
+        status=0
+        bash scripts/build.sh || status=$?
+        df -h
+        case "$status" in
+          0) echo "done=true" >> "$GITHUB_OUTPUT" ;;
+          124) echo "done=false" >> "$GITHUB_OUTPUT" ;;
+          *) exit "$status" ;;
+        esac
+
+    - name: Pack the build state
+      if: steps.build.outputs.done == 'false'
+      shell: bash
+      run: |
+        mkdir -p "$MOWSER_ROOT/state"
+        tar -C "$MOWSER_WORK/src/out" --zstd -cf "$MOWSER_ROOT/state/state.tar.zst" \
+          "${{ inputs.target }}"
+        ls -l "$MOWSER_ROOT/state"
+
+    - name: Upload the build state
+      if: steps.build.outputs.done == 'false'
+      uses: actions/upload-artifact@v7
+      with:
+        name: state-${{ inputs.target }}
+        path: ${{ env.MOWSER_ROOT }}/state/state.tar.zst
+        compression-level: 0
+        retention-days: 2
+        overwrite: true
+
+    - name: Upload the package
+      if: steps.build.outputs.done == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: mowser-${{ inputs.target }}
+        path: ${{ env.MOWSER_ROOT }}/packages/mowser-${{ inputs.target }}.*
+        compression-level: 0
