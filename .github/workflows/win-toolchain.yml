@@ -38,6 +38,20 @@ jobs:
             if (-not (Test-Path $include)) { throw "Windows SDK $env:SDK_VERSION is missing." }
           }
 
+      - name: Keep only the newest MSVC toolset
+        # package_from_installed.py packages exactly one MSVC toolset.
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -version "[18.0,19.0)" -property installationPath
+          $msvc = Join-Path $vs "VC\Tools\MSVC"
+          $toolsets = Get-ChildItem $msvc -Directory | Sort-Object { [version]$_.Name }
+          $toolsets | ForEach-Object { Write-Output "Found MSVC $($_.Name)" }
+          $toolsets | Select-Object -SkipLast 1 | ForEach-Object {
+            Move-Item $_.FullName (Join-Path $env:RUNNER_TEMP "msvc-$($_.Name)")
+          }
+          Write-Output "Packaging MSVC $($toolsets[-1].Name)"
+
       - name: Package the toolchain
         shell: bash
         run: |
