@@ -61,6 +61,8 @@ runs:
       run: |
         git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git \
           "$MOWSER_ROOT/depot_tools"
+        # The first gclient run bootstraps depot_tools' own Python and CIPD client.
+        "$MOWSER_ROOT/depot_tools/gclient" --version
         echo "$MOWSER_ROOT/depot_tools" >> "$GITHUB_PATH"
         echo "DEPOT_TOOLS_UPDATE=0" >> "$GITHUB_ENV"
         echo "CHROMIUM_VERSION=$(cat chromium-version)" >> "$GITHUB_ENV"
