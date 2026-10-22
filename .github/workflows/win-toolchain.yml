@@ -10,7 +10,7 @@ on:
 
 jobs:
   package:
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -44,7 +44,7 @@ jobs:
             https://chromium.googlesource.com/chromium/tools/depot_tools.git "$RUNNER_TEMP/depot_tools"
           mkdir -p win-toolchain
           cd win-toolchain
-          python "$RUNNER_TEMP/depot_tools/win_toolchain/package_from_installed.py" 2022 \
+          python "$RUNNER_TEMP/depot_tools/win_toolchain/package_from_installed.py" 2026 \
             -w "$SDK_VERSION" --noarm
           ls -l
           basename "$(ls *.zip)" .zip > name.txt
