@@ -52,6 +52,9 @@ for target in ${MOWSER_TARGETS:-android-arm64}; do
     echo "target_cpu = \"${cpu}\""
     if [ -n "${MOWSER_REAPI_ADDRESS:-}" ]; then
       echo "use_remoteexec = true"
+      # Siso declares the crash report directory as an output of every compile, and
+      # BuildBuddy rejects output paths outside the build directory.
+      echo "clang_diagnostic_dir = \"clang-crashreports\""
     fi
     if [ "$os" != android ] && [ -n "${MOWSER_GOOGLE_API_KEY:-}" ]; then
       echo "google_api_key = \"${MOWSER_GOOGLE_API_KEY}\""
