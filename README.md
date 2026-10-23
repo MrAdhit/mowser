@@ -34,6 +34,7 @@ manifest meta-data.
 | `scripts/sync.sh` | Fetches Chromium and runs the gclient hooks |
 | `scripts/build.sh` | Applies the patches, bundles uBlock Origin, and builds and packages the targets |
 | `scripts/ubo.sh` | Writes the bundled uBlock Origin zip |
+| `siso/` | Siso backend config and credential helper for BuildBuddy remote execution |
 | `.github/` | GitHub Actions workflows that build every platform |
 | `build.py` | Modal Function that syncs Chromium and builds Android targets |
 | `emulator.py` | Modal VM sandbox running an Android emulator, reachable over adb |
@@ -94,6 +95,14 @@ and is made per Chromium version; run the workflow again in either case.
 gh workflow run win-toolchain
 ```
 
+When the `BUILDBUDDY_API_KEY` secret is set, the builds on Linux runners
+(Android, Linux and Windows) run their compile actions on BuildBuddy's remote
+execution (`remote.buildbuddy.io`), in the container image of Chromium's
+Google backend config. Siso reads its settings from the gclient custom vars
+that `scripts/sync.sh` writes when `MOWSER_REAPI_ADDRESS` is set, and
+`scripts/build.sh` then adds `use_remoteexec = true` to each target's
+arguments. The macOS build compiles locally.
+
 ### Repository secrets
 
 Desktop builds use these repository secrets for Google sign-in and sync. A
@@ -104,6 +113,9 @@ desktop build made without them runs without Google sign-in.
 | `GOOGLE_API_KEY` | `google_api_key` |
 | `GOOGLE_DEFAULT_CLIENT_ID` | `google_default_client_id` |
 | `GOOGLE_DEFAULT_CLIENT_SECRET` | `google_default_client_secret` |
+
+The `BUILDBUDDY_API_KEY` secret enables remote execution on BuildBuddy for the
+builds on Linux runners.
 
 ### On a Linux machine
 

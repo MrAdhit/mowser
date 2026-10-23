@@ -50,6 +50,9 @@ for target in ${MOWSER_TARGETS:-android-arm64}; do
   {
     cat "$work/args/common.gn" "$work/args/${os}.gn"
     echo "target_cpu = \"${cpu}\""
+    if [ -n "${MOWSER_REAPI_ADDRESS:-}" ]; then
+      echo "use_remoteexec = true"
+    fi
     if [ "$os" != android ] && [ -n "${MOWSER_GOOGLE_API_KEY:-}" ]; then
       echo "google_api_key = \"${MOWSER_GOOGLE_API_KEY}\""
       echo "google_default_client_id = \"${MOWSER_GOOGLE_CLIENT_ID}\""

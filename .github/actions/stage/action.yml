@@ -23,6 +23,12 @@ inputs:
   google-client-secret:
     required: false
     default: ""
+  buildbuddy-api-key:
+    description: >
+      BuildBuddy API key. When set, builds on Linux runners run their compile actions on
+      BuildBuddy's remote execution.
+    required: false
+    default: ""
 
 outputs:
   done:
@@ -45,6 +51,9 @@ runs:
           # The temporary disk at /mnt is the largest on Linux runners.
           sudo mkdir -p /mnt/mowser && sudo chown "$USER" /mnt/mowser
           echo "MOWSER_ROOT=/mnt/mowser" >> "$GITHUB_ENV"
+          if [ -n "${{ inputs.buildbuddy-api-key }}" ]; then
+            echo "MOWSER_REAPI_ADDRESS=remote.buildbuddy.io:443" >> "$GITHUB_ENV"
+          fi
         else
           sudo rm -rf "$ANDROID_HOME" "$HOME/Library/Android"
           brew install --quiet coreutils findutils gnu-tar zstd
@@ -133,6 +142,7 @@ runs:
         MOWSER_GOOGLE_API_KEY: ${{ inputs.google-api-key }}
         MOWSER_GOOGLE_CLIENT_ID: ${{ inputs.google-client-id }}
         MOWSER_GOOGLE_CLIENT_SECRET: ${{ inputs.google-client-secret }}
+        MOWSER_BUILDBUDDY_API_KEY: ${{ inputs.buildbuddy-api-key }}
       run: |
         rm -rf "$MOWSER_WORK/patches" "$MOWSER_WORK/args"
         cp -r patches args "$MOWSER_WORK/"

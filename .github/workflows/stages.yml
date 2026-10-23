@@ -33,6 +33,7 @@ jobs:
           google-api-key: ${{ secrets.GOOGLE_API_KEY }}
           google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
           google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   stage2:
     needs: stage1
@@ -52,6 +53,7 @@ jobs:
           google-api-key: ${{ secrets.GOOGLE_API_KEY }}
           google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
           google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   stage3:
     needs: stage2
@@ -71,6 +73,7 @@ jobs:
           google-api-key: ${{ secrets.GOOGLE_API_KEY }}
           google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
           google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   stage4:
     needs: stage3
@@ -90,6 +93,7 @@ jobs:
           google-api-key: ${{ secrets.GOOGLE_API_KEY }}
           google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
           google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   stage5:
     needs: stage4
@@ -109,6 +113,7 @@ jobs:
           google-api-key: ${{ secrets.GOOGLE_API_KEY }}
           google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
           google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   stage6:
     needs: stage5
@@ -128,6 +133,7 @@ jobs:
           google-api-key: ${{ secrets.GOOGLE_API_KEY }}
           google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
           google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   stage7:
     needs: stage6
@@ -147,6 +153,7 @@ jobs:
           google-api-key: ${{ secrets.GOOGLE_API_KEY }}
           google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
           google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   stage8:
     needs: stage7
@@ -166,6 +173,7 @@ jobs:
           google-api-key: ${{ secrets.GOOGLE_API_KEY }}
           google-client-id: ${{ secrets.GOOGLE_DEFAULT_CLIENT_ID }}
           google-client-secret: ${{ secrets.GOOGLE_DEFAULT_CLIENT_SECRET }}
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
   unfinished:
     needs: stage8
